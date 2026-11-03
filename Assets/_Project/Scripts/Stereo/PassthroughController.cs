@@ -27,6 +27,11 @@ namespace CardboardXR.Stereo
     public class PassthroughController : MonoBehaviour
     {
         static readonly int k_DisplayTransformId = Shader.PropertyToID("_UnityDisplayTransform");
+        static readonly int k_HumanStencilId = Shader.PropertyToID("_HumanStencil");
+        // View zoom steps the settings panel's View button cycles through, and where it starts.
+        static readonly float[] k_Zooms = { 1f, 1.25f, 1.5f, 1.75f, 2f };
+        const float k_DefaultZoom = 1.5f;
+        const string k_ZoomKey = "CardboardXR.ViewZoom";
         // The nearest the image comes, in meters.
         const float k_MinDistance = 0.2f;
         // How quickly the image follows a change of focus: most of the way in this many seconds.
@@ -46,6 +51,8 @@ namespace CardboardXR.Stereo
         [SerializeField] float m_Distance = 2f;
         [Tooltip("Height of the passthrough texture in pixels; its width follows the camera image's shape.")]
         [SerializeField] int m_TextureHeight = 720;
+        [Tooltip("The panel's View button: cycles how much the picture is magnified, and shows it.")]
+        [SerializeField] M3Button m_ZoomButton;
 
         ARCameraManager m_CameraManager;
         TrackedPoseDriver m_PoseDriver;
@@ -64,8 +71,24 @@ namespace CardboardXR.Stereo
         bool m_HasImage;
         float? m_FocusDistance;
         float m_ShownDistance;
+        float m_Zoom = k_DefaultZoom;
+        // The user's hand over virtual things (iPhone 11 port): ARKit's people stencil goes into the
+        // passthrough texture's alpha, and a second quad over the screen draws those texels last.
+        AROcclusionManager m_Occlusion;
+        Material m_PeopleMaterial;
+        Renderer m_HandOverlay;
+        bool m_PeopleDrawn;
+        bool m_PeopleRequested = true;
+        bool m_LoggedPeople;
 
         public bool IsOn => m_On;
+
+        // Whether the real hand is drawn over virtual things. A demo that draws at the fingertips, as
+        // painting does, turns it off, since the hand would hide the brush.
+        public bool HandInFront { get; set; } = true;
+
+        // How much the picture, and the whole view with it, is magnified while passthrough is on.
+        public float Zoom => m_Zoom;
 
         // Where the image should be, in meters from the camera, or null for m_Distance. It eases there.
         public float? FocusDistance
@@ -84,6 +107,38 @@ namespace CardboardXR.Stereo
             m_CameraManager = m_ArCamera.GetComponent<ARCameraManager>();
             m_PoseDriver = m_ArCamera.GetComponent<TrackedPoseDriver>();
             m_ShownDistance = m_Distance;
+            m_Occlusion = FindAnyObjectByType<AROcclusionManager>();
+            m_Zoom = LaunchOptions.GetInt("zoom", 0) > 0
+                ? LaunchOptions.GetInt("zoom", 0) / 100f
+                : PlayerPrefs.GetFloat(k_ZoomKey, k_DefaultZoom);
+            UpdateZoomButton();
+        }
+
+        // The settings panel's View button: the next magnification, kept for next time.
+        public void CycleZoom()
+        {
+            var next = 0;
+            for (var i = 0; i < k_Zooms.Length; i++)
+            {
+                if (k_Zooms[i] > m_Zoom + 0.01f)
+                {
+                    next = i;
+                    break;
+                }
+            }
+            m_Zoom = k_Zooms[next];
+            PlayerPrefs.SetFloat(k_ZoomKey, m_Zoom);
+            PlayerPrefs.Save();
+            if (m_On && m_Rig != null)
+                m_Rig.ViewZoom = m_Zoom;
+            UpdateZoomButton();
+            Debug.Log($"[Passthrough] View size {m_Zoom * 100f:F0}%");
+        }
+
+        void UpdateZoomButton()
+        {
+            if (m_ZoomButton != null)
+                m_ZoomButton.Text = $"View {m_Zoom * 100f:F0}%";
         }
 
         // After the other components' OnEnable, so the mode set here sticks.
@@ -105,9 +160,89 @@ namespace CardboardXR.Stereo
             }
             if (m_CameraMaterial != null)
                 Destroy(m_CameraMaterial);
+            if (m_PeopleMaterial != null)
+                Destroy(m_PeopleMaterial);
             if (m_Quad != null)
                 Destroy(m_Quad);
             m_Commands?.Release();
+        }
+
+        // ARKit's people segmentation, for the hand over virtual things, while passthrough is on. It
+        // runs on the Neural Engine (A12 and later), so it costs the CPU little. Where it isn't
+        // supported the hand is simply drawn as before, under everything.
+        void SetPeopleSegmentation(bool on)
+        {
+            m_PeopleRequested = !on;
+            if (m_Occlusion == null)
+                return;
+            // Known only once the AR session runs; LateUpdate asks again until then.
+            if (on && m_Occlusion.descriptor == null)
+                return;
+            m_PeopleRequested = true;
+            var supported = m_Occlusion.descriptor != null &&
+                            m_Occlusion.descriptor.humanSegmentationStencilImageSupported == UnityEngine.XR.ARSubsystems.Supported.Supported;
+            if (on && !supported)
+            {
+                if (!m_LoggedPeople)
+                    Debug.Log("[Passthrough] People segmentation isn't supported here: the hand stays behind virtual things");
+                m_LoggedPeople = true;
+                return;
+            }
+            m_Occlusion.requestedHumanStencilMode = on
+                ? UnityEngine.XR.ARSubsystems.HumanSegmentationStencilMode.Fastest
+                : UnityEngine.XR.ARSubsystems.HumanSegmentationStencilMode.Disabled;
+            if (on)
+                m_Occlusion.enabled = true;
+            Debug.Log($"[Passthrough] People segmentation {(on ? "requested" : "off")}");
+        }
+
+        // Draws ARKit's people stencil into the passthrough texture's alpha, with the camera image's own
+        // transform; false if there's no stencil this frame.
+        bool DrawPeople(Matrix4x4 displayTransform)
+        {
+            if (!HandInFront || m_Occlusion == null || !m_Occlusion.enabled ||
+                m_Occlusion.currentHumanStencilMode == UnityEngine.XR.ARSubsystems.HumanSegmentationStencilMode.Disabled)
+                return false;
+            var stencil = m_Occlusion.humanStencilTexture;
+            if (stencil == null)
+                return false;
+            if (m_PeopleMaterial == null)
+            {
+                var shader = Shader.Find("Hidden/CardboardXR/PassthroughPeople");
+                if (shader == null || !shader.isSupported)
+                {
+                    if (!m_LoggedPeople)
+                        Debug.LogWarning("[Passthrough] The people shader isn't in the build");
+                    m_LoggedPeople = true;
+                    return false;
+                }
+                m_PeopleMaterial = new Material(shader) { name = "Passthrough People" };
+            }
+            m_PeopleMaterial.SetTexture(k_HumanStencilId, stencil);
+            m_PeopleMaterial.SetMatrix(k_DisplayTransformId, displayTransform);
+            m_Commands.DrawMesh(m_Quad, Matrix4x4.identity, m_PeopleMaterial);
+            if (!m_LoggedPeople)
+                Debug.Log($"[Passthrough] Hand in front: people stencil {stencil.width}x{stencil.height}");
+            m_LoggedPeople = true;
+            return true;
+        }
+
+        // A copy of the screen quad, drawn last, showing the camera image only where a person is.
+        void EnsureHandOverlay()
+        {
+            if (m_HandOverlay != null)
+                return;
+            var shader = Shader.Find("Hidden/CardboardXR/PassthroughHand");
+            if (shader == null || !shader.isSupported || !m_Screen.TryGetComponent<MeshFilter>(out var filter))
+                return;
+            var overlay = new GameObject("Passthrough Hand", typeof(MeshFilter), typeof(MeshRenderer)) { layer = m_Screen.gameObject.layer };
+            overlay.transform.SetParent(m_Screen.transform.parent, false);
+            overlay.GetComponent<MeshFilter>().sharedMesh = filter.sharedMesh;
+            m_HandOverlay = overlay.GetComponent<MeshRenderer>();
+            m_HandOverlay.sharedMaterial = new Material(shader) { name = "Passthrough Hand", mainTexture = m_Texture };
+            m_HandOverlay.shadowCastingMode = ShadowCastingMode.Off;
+            m_HandOverlay.receiveShadows = false;
+            m_HandOverlay.enabled = false;
         }
 
         public void Toggle() => Choose(!m_On);
@@ -139,9 +274,17 @@ namespace CardboardXR.Stereo
             m_PoseDriver.enabled = on;
             m_Fusion.EyesAtCamera = on;
             if (m_Rig != null)
+            {
                 m_Rig.MonoEyes = on;
+                m_Rig.ViewZoom = on ? m_Zoom : 1f;
+            }
+            SetPeopleSegmentation(on);
             // Shown once the first image has arrived.
             m_Screen.enabled = on && m_HasImage;
+            if (!on)
+                m_PeopleDrawn = false;
+            if (m_HandOverlay != null && !on)
+                m_HandOverlay.enabled = false;
             VirtualEnvironment.SetAllHidden(on);
             if (m_Toggle != null)
                 m_Toggle.Selected = on;
@@ -171,7 +314,7 @@ namespace CardboardXR.Stereo
 
             var size = max - min;
             EnsureTexture(Screen.width * size.x / (Screen.height * size.y));
-            DrawCameraImage();
+            DrawCameraImage(widened);
 
             // Screen UV maps to NDC as 2uv - 1, which ARCore's projection maps to camera space at unit
             // distance as (ndc + p02) / p00 across and (ndc + p12) / p11 up.
@@ -247,6 +390,8 @@ namespace CardboardXR.Stereo
             // showed up on the iPhone, as a black passthrough image with nothing logged.
             m_Texture = new RenderTexture(width, height, 24) { name = "Passthrough" };
             m_Screen.material.mainTexture = m_Texture;
+            if (m_HandOverlay != null)
+                m_HandOverlay.sharedMaterial.mainTexture = m_Texture;
         }
 
         // Reads one pixel back from the middle of the passthrough texture, once. A black quad in the
@@ -316,8 +461,8 @@ namespace CardboardXR.Stereo
         }
 
         // Draws the camera image into the texture the way ARCameraBackground draws the screen: a unit
-        // quad through an orthographic projection.
-        void DrawCameraImage()
+        // quad through an orthographic projection. Then the people stencil into its alpha, if there is one.
+        void DrawCameraImage(Matrix4x4 displayTransform)
         {
             if (m_Quad == null)
                 m_Quad = CreateUnitQuad();
@@ -327,6 +472,7 @@ namespace CardboardXR.Stereo
             m_Commands.ClearRenderTarget(false, true, Color.black);
             m_Commands.SetViewProjectionMatrices(Matrix4x4.identity, Matrix4x4.Ortho(0f, 1f, 0f, 1f, -0.1f, 9.9f));
             m_Commands.DrawMesh(m_Quad, Matrix4x4.identity, m_CameraMaterial);
+            m_PeopleDrawn = DrawPeople(displayTransform);
             Graphics.ExecuteCommandBuffer(m_Commands);
         }
 
@@ -382,6 +528,18 @@ namespace CardboardXR.Stereo
             var screen = m_Screen.transform;
             screen.SetLocalPositionAndRotation(new Vector3(m_FrustumCenter.x * d, m_FrustumCenter.y * d, d), Quaternion.identity);
             screen.localScale = new Vector3(m_FrustumSize.x * d, m_FrustumSize.y * d, 1f);
+
+            if (!m_PeopleRequested)
+                SetPeopleSegmentation(true);
+            var handInFront = HandInFront && m_PeopleDrawn;
+            if (handInFront)
+                EnsureHandOverlay();
+            if (m_HandOverlay != null)
+            {
+                m_HandOverlay.enabled = handInFront;
+                m_HandOverlay.transform.SetLocalPositionAndRotation(screen.localPosition, screen.localRotation);
+                m_HandOverlay.transform.localScale = screen.localScale;
+            }
         }
     }
 }

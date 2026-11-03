@@ -167,6 +167,11 @@ namespace ProjectBootstrap
             BuildGaze(head, fusion, reticleShader);
             BuildFade(head, demos);
             var boundary = BuildRoomBoundary(origin, fusion, boundaryShader);
+            // iPhone 11 port: detected walls hide virtual things behind them in passthrough.
+            var walls = new SerializedObject(origin.AddComponent<WallOccluders>());
+            walls.FindProperty("m_DepthMask").objectReferenceValue =
+                AssetDatabase.LoadAssetAtPath<Material>("Assets/_Project/Demos/Portal/Depth Mask.mat");
+            walls.ApplyModifiedPropertiesWithoutUndo();
             // Shown in 6DoF only (RoomBoundary), where there's AR to scan with.
             var scanButton = ToolbarItem(panel, "Scan", "radar", "Scan Room", boundary.ToggleScan);
             toolbar[4] = scanButton;
@@ -180,7 +185,7 @@ namespace ProjectBootstrap
             var settings = BuildSettings(origin, fusion, panel);
             BuildLibrary(panel, demos, settings, toolbar[0], catalog);
             BuildArDebugView(origin, rig, fusion, boundary, arCamera, arViewOnly);
-            BuildPassthrough(passthrough, fusion, rig, arCamera, passthroughToggle, passthroughShader);
+            BuildPassthrough(passthrough, fusion, rig, arCamera, passthroughToggle, toolbar[5], passthroughShader);
             BuildLighting(origin, fusion, passthrough, arCamera);
             BuildDemos(demosObject, demos, catalog, fusion, rig, passthrough, boundary, origin, settings);
 
@@ -566,7 +571,7 @@ namespace ProjectBootstrap
         // front of the AR camera that both eyes see. Its shader draws it first, ignoring depth and
         // writing none, so virtual things always draw over it, however near or far they are.
         static void BuildPassthrough(PassthroughController passthrough, HeadPoseFusion fusion, StereoRig rig,
-            Camera arCamera, M3Button toggle, Shader passthroughShader)
+            Camera arCamera, M3Button toggle, M3Button zoomButton, Shader passthroughShader)
         {
             var material = SaveAsset(new Material(passthroughShader) { name = "Passthrough" }, $"{GeneratedFolder}/Passthrough.mat");
             var screen = CreatePrimitive(PrimitiveType.Quad, "Passthrough Screen", arCamera.transform, material);
@@ -582,6 +587,7 @@ namespace ProjectBootstrap
             serialized.FindProperty("m_ArCamera").objectReferenceValue = arCamera;
             serialized.FindProperty("m_Screen").objectReferenceValue = screenRenderer;
             serialized.FindProperty("m_Toggle").objectReferenceValue = toggle;
+            serialized.FindProperty("m_ZoomButton").objectReferenceValue = zoomButton;
             serialized.ApplyModifiedPropertiesWithoutUndo();
         }
 
@@ -720,7 +726,7 @@ namespace ProjectBootstrap
         // Recenter and Scan Room (6DoF only); and the toggles, 6DoF and Passthrough, shown selected
         // while on. (Pinching is always on: see PinchInput.) M3Toolbar lays out only the items
         // showing. Scan Room is added once the room boundary exists, then ArrangeToolbar finishes it.
-        // Returns the items (Apps, Recenter, 6DoF, Passthrough, then one empty for Scan Room) and the panel.
+        // Returns the items (Apps, Recenter, 6DoF, Passthrough, one empty for Scan Room, View size) and the panel.
         static (M3Button[] items, RectTransform panel) BuildToolbar(HeadPoseFusion fusion,
             PassthroughController passthrough, DemoManager demos)
         {
@@ -735,7 +741,7 @@ namespace ProjectBootstrap
 
             // The view switch isn't here: it's on the screen itself, in the settings menu, since it's
             // pressed with the phone in hand where this panel can't be reached.
-            var items = new M3Button[5];
+            var items = new M3Button[6];
             // Apps shows the app library above the panel (BuildLibrary), the way to the lobby and
             // between demos.
             var library = demos.gameObject.AddComponent<AppLibrary>();
@@ -743,6 +749,8 @@ namespace ProjectBootstrap
             items[1] = ToolbarItem(panel, "Recenter", "my_location", "Recenter", fusion.Recenter);
             items[2] = ToolbarItem(panel, "Tracking Mode", "view_in_ar", "6DoF", fusion.ToggleMode);
             items[3] = ToolbarItem(panel, "Passthrough", "visibility", "Passthrough", passthrough.Toggle);
+            // iPhone 11 port: how much the passthrough picture is magnified (PassthroughController.CycleZoom).
+            items[5] = ToolbarItem(panel, "View Size", "aspect_ratio", "View", passthrough.CycleZoom);
             return (items, panel);
         }
 
@@ -816,9 +824,9 @@ namespace ProjectBootstrap
         // Orders the items into their groups, with a divider before each group after the first.
         static void ArrangeToolbar(RectTransform panel, M3Button[] items)
         {
-            // Apps | Recenter, Scan Room | 6DoF, Passthrough.
-            var order = new[] { items[0], items[1], items[4], items[2], items[3] };
-            var groups = new[] { 0, 1, 1, 2, 2 };
+            // Apps | Recenter, Scan Room | 6DoF, Passthrough, View size.
+            var order = new[] { items[0], items[1], items[4], items[2], items[3], items[5] };
+            var groups = new[] { 0, 1, 1, 2, 2, 2 };
             var dividers = new Image[3];
             for (var g = 1; g < dividers.Length; g++)
             {

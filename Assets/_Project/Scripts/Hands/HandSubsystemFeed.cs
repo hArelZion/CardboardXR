@@ -30,10 +30,15 @@ namespace CardboardXR.Hands
         [Tooltip("The eyes: the pointing ray runs from them through the point between the thumb and index fingertips.")]
         [SerializeField] Transform m_Eyes;
         // From the pinch study: fingertips about 2-3 cm apart pinched and 9.5-10.4 cm open.
+        // iPhone 11 port: tighter than upstream's 5 and 7 cm. Without LiDAR the hand's size is only
+        // estimated, and a relaxed, half-curled hand read under 5 cm: painting started with no pinch.
         [Tooltip("Fingertips closer than this, in meters, start a pinch.")]
-        [SerializeField] float m_PinchDistance = 0.05f;
+        [SerializeField] float m_PinchDistance = 0.035f;
         [Tooltip("Fingertips farther apart than this, in meters, end a pinch.")]
-        [SerializeField] float m_ReleaseDistance = 0.07f;
+        [SerializeField] float m_ReleaseDistance = 0.055f;
+        [Tooltip("A pinch only starts while the fingertips' gap in the image is under this share of the " +
+                 "palm's width there, as well (iPhone 11 port). The pinch study measured about 0.23 pinched.")]
+        [SerializeField] float m_StartRatio = 0.6f;
         [Tooltip("Fingertips at least this far apart, in meters, give a pinch value of 0.")]
         [SerializeField] float m_OpenDistance = 0.09f;
         [Tooltip("Fingertips this far apart in the image, over the palm's width there, end a pinch " +
@@ -56,6 +61,9 @@ namespace CardboardXR.Hands
         // leaving the camera's view, where most losses happen (0-10% from the edge in the logs; false
         // opens read at most 2%, so 3% holds back few real releases).
         const int k_OpenResults = 2;
+        // Likewise a pinch only starts on this many closed results in a row (iPhone 11 port).
+        const int k_CloseResults = 2;
+        int m_CloseResults;
         // Longer than HandInteractorRig's m_LostSeconds (0.25 s).
         const float k_PinchKeptSeconds = 0.3f;
         float m_LostSince = -1f;
@@ -209,8 +217,22 @@ namespace CardboardXR.Hands
                         Debug.Log($"[Hands] Fingertips {m_Tracker.PinchDistance * 100f:F1} cm apart while the hand turned over; not a pinch");
                     m_LoggedTurn = true;
                 }
+                else if (wouldClose && m_Tracker.PinchRatio >= m_StartRatio)
+                {
+                    // The 3D shape says closed but the image plainly shows a gap (iPhone 11 port).
+                    m_CloseResults = 0;
+                }
+                else if (wouldClose)
+                {
+                    // And two results in a row, so one stray shape doesn't click or paint.
+                    if (newResult)
+                        m_CloseResults++;
+                    if (m_CloseResults >= k_CloseResults)
+                        m_Pinch.Update(m_Tracker.PinchDistance);
+                }
                 else
                 {
+                    m_CloseResults = 0;
                     m_Pinch.Update(m_Tracker.PinchDistance);
                 }
                 if (!m_Turn.IsTurning)
@@ -251,6 +273,7 @@ namespace CardboardXR.Hands
                           "whose 3D shape had collapsed");
             m_Pinch.Reset();
             m_OpenResults = 0;
+            m_CloseResults = 0;
         }
 
         void UpdateSide()

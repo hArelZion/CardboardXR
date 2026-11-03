@@ -65,6 +65,46 @@ namespace CardboardXR.Interaction
             return hit != null;
         }
 
+        // The interactable control nearest the ray within maxAngle (radians), measured from the ray to
+        // the control's edge, for gaze snapping (iPhone 11 port): through a phone viewer the head
+        // aims a little unsteadily, and the reticle slid off small buttons as a pinch closed.
+        public bool NearestControl(Ray ray, float maxDistance, float maxAngle, out Graphic hit, out float hitDistance, out float angle)
+        {
+            hit = null;
+            hitDistance = maxDistance;
+            angle = maxAngle;
+            var graphics = GraphicRegistry.GetRaycastableGraphicsForCanvas(m_Canvas);
+            for (var i = 0; i < graphics.Count; i++)
+            {
+                var graphic = graphics[i];
+                if (!graphic.raycastTarget || !graphic.isActiveAndEnabled || graphic.canvasRenderer.cull)
+                    continue;
+                var selectable = graphic.GetComponentInParent<Selectable>();
+                if (selectable == null || !selectable.IsInteractable())
+                    continue;
+
+                var rect = graphic.rectTransform;
+                if (Vector3.Dot(ray.direction, rect.forward) <= 0f)
+                    continue;
+                if (!new Plane(rect.forward, rect.position).Raycast(ray, out var distance) || distance > maxDistance || distance <= 0f)
+                    continue;
+                if (!BlocksRaycasts(rect))
+                    continue;
+                // How far outside the rectangle the ray passes, in world units, as an angle from the eye.
+                var local = (Vector2)rect.InverseTransformPoint(ray.GetPoint(distance));
+                var r = rect.rect;
+                var outside = new Vector2(Mathf.Max(r.xMin - local.x, 0f, local.x - r.xMax), Mathf.Max(r.yMin - local.y, 0f, local.y - r.yMax));
+                var world = rect.TransformVector(outside).magnitude;
+                var a = Mathf.Atan2(world, distance);
+                if (a >= angle)
+                    continue;
+                hit = graphic;
+                hitDistance = distance;
+                angle = a;
+            }
+            return hit != null;
+        }
+
         static bool BlocksRaycasts(Transform transform)
         {
             for (var t = transform; t != null; t = t.parent)

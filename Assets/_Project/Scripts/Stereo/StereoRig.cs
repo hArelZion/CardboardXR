@@ -47,6 +47,7 @@ namespace CardboardXR.Stereo
         readonly Camera[] m_EyeCameras = new Camera[2];
         readonly Vector3[] m_EyeOffsets = new Vector3[2];
         bool m_MonoEyes;
+        float m_ViewZoom = 1f;
         readonly RenderTexture[] m_EyeTextures = new RenderTexture[2];
         readonly Mesh[] m_Meshes = new Mesh[2];
         readonly Material[] m_Materials = new Material[2];
@@ -78,6 +79,25 @@ namespace CardboardXR.Stereo
             }
         }
 
+        // Magnifies the whole view by narrowing each eye's frustum, 1 being true scale. Passthrough
+        // sets it (iPhone 11 port): the camera sees only about 68 x 42 degrees, much less than a
+        // viewer's lens, so at true scale its picture is a window with a dark border around it, and
+        // virtual things drawn past its edge hang over the dark. Magnified, the picture fills more of
+        // the lens. Virtual things are magnified with it, so they still line up with the room.
+        public float ViewZoom
+        {
+            get => m_ViewZoom;
+            set
+            {
+                value = Mathf.Clamp(value, 1f, 3f);
+                if (Mathf.Approximately(m_ViewZoom, value))
+                    return;
+                m_ViewZoom = value;
+                ApplyProjection();
+                Debug.Log($"[Stereo] View zoom {value:F2}x");
+            }
+        }
+
         public ViewerParams Viewer
         {
             get => m_Viewer;
@@ -92,6 +112,12 @@ namespace CardboardXR.Stereo
         void OnEnable()
         {
             var frameRate = LaunchOptions.GetInt("fps", m_TargetFrameRate);
+            // iPhone 11 port: on a 60 Hz screen a 120 fps target ran at about 25 fps, each frame
+            // waiting ~13 ms to be presented while the CPU and GPU sat idle. Ask for what the screen
+            // can show.
+            var screenMax = DeviceState.ScreenMaximumFramesPerSecond;
+            if (screenMax > 0 && frameRate > screenMax)
+                frameRate = screenMax;
             Application.targetFrameRate = frameRate;
             // Both cost fill rate and bandwidth, which is heat: they're launch options so a run can be
             // compared against another without a rebuild, while the phone is unplugged.
@@ -196,9 +222,9 @@ namespace CardboardXR.Stereo
             eyeCamera.nearClipPlane = m_NearClip;
             eyeCamera.farClipPlane = m_FarClip;
             eyeCamera.cullingMask &= ~(1 << CompositorLayer | 1 << RightEyeOnlyLayer);
-            eyeCamera.fieldOfView = m_MonoFieldOfView;
             eyeCamera.depth = 0;
             m_EyeCameras[0] = eyeCamera;
+            ApplyProjection();
         }
 
         void CreateEye(Eye eye)
@@ -226,9 +252,33 @@ namespace CardboardXR.Stereo
             eyeCamera.cullingMask &= ~(1 << CompositorLayer | 1 << (eye == Eye.Left ? RightEyeOnlyLayer : LeftEyeOnlyLayer));
             eyeCamera.depth = -1;
             eyeCamera.targetTexture = m_EyeTextures[index];
-            // Asymmetric frustum from the lens field of view; set after the clip planes.
-            eyeCamera.projectionMatrix = m_Lens.GetProjectionMatrix(eye, m_NearClip, m_FarClip);
             m_EyeCameras[index] = eyeCamera;
+            // Asymmetric frustum from the lens field of view; set after the clip planes.
+            ApplyProjection();
+        }
+
+        // Each eye's lens frustum, narrowed by ViewZoom; the mono view's field of view likewise.
+        void ApplyProjection()
+        {
+            if (m_Lens == null)
+                return;
+            if (m_Mono)
+            {
+                if (m_EyeCameras[0] != null)
+                    m_EyeCameras[0].fieldOfView = 2f * Mathf.Atan(Mathf.Tan(m_MonoFieldOfView * Mathf.Deg2Rad / 2f) / m_ViewZoom) * Mathf.Rad2Deg;
+                return;
+            }
+            for (var i = 0; i < 2; i++)
+            {
+                if (m_EyeCameras[i] == null)
+                    continue;
+                // Dividing every edge's tangent by the zoom scales m00 and m11 by it; m02 and m12, the
+                // lens axis's place on the eye's image, stay, so the view grows about that axis.
+                var projection = m_Lens.GetProjectionMatrix((Eye)i, m_NearClip, m_FarClip);
+                projection.m00 *= m_ViewZoom;
+                projection.m11 *= m_ViewZoom;
+                m_EyeCameras[i].projectionMatrix = projection;
+            }
         }
 
         // Each eye at its lens offset, or both at the point between them while MonoEyes.

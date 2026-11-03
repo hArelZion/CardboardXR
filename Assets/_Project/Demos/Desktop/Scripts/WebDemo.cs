@@ -26,6 +26,7 @@ namespace CardboardXR.Demos.Desktop
         TouchScreenKeyboard m_Keyboard;
         SurfaceKeyboard m_Keys;
         Vector2 m_Cursor = new(0.5f, 0.5f);
+        float m_NextStatus;
 
         public override void OnDemoEnter(CoreServices core)
         {
@@ -74,6 +75,12 @@ namespace CardboardXR.Demos.Desktop
             if (m_Screen == null)
                 return;
             m_Web.Update();
+            // iPhone 11 port: the first test showed no page and logged nothing to say why.
+            if (Time.unscaledTime >= m_NextStatus)
+            {
+                m_NextStatus = Time.unscaledTime + 5f;
+                Debug.Log($"[Web] {m_Web.Status}");
+            }
             m_Screen.Interactive = m_Web.HasFrame;
             m_Screen.Show(m_Web.HasFrame ? m_Web.Texture : null, m_Web.Aspect,
                 WebView.Supported ? "Loading..." : "The browser runs on the iPhone.");

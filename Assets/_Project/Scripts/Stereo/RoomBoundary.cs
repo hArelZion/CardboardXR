@@ -116,6 +116,11 @@ namespace CardboardXR.Stereo
         public float SurfaceArea => m_SurfaceArea;
         public bool HasFloor => m_Floor.HasValue;
 
+        // The floor's height in world space: the detected one, or else a guess this far below the
+        // head, a standing adult's eye height (iPhone 11 port, for placing on a floor not yet found).
+        public float FloorHeight(Vector3 head, float guessBelowHead = 1.5f) =>
+            m_Floor.HasValue ? transform.TransformPoint(new Vector3(0f, m_Floor.Value, 0f)).y : head.y - guessBelowHead;
+
         // Whether hand tracking should pause, leaving the CPU to plane detection: at the start of a scan,
         // for at most k_HandPauseSeconds of tracking. A floor scan with the floor never in view paused
         // the hands for a whole minute, which looked like hand tracking failing.

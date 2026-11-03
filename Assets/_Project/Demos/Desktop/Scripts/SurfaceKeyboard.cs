@@ -18,12 +18,17 @@ namespace CardboardXR.Demos.Desktop
     // where the camera's ray through the fingertip meets the table.
     public class SurfaceKeyboard
     {
-        const float k_Key = 0.03f;          // key pitch, meters: bigger than a real keyboard's, for camera taps
+        // iPhone 11 port: 4 cm, up from 3, so looking at a key and pinching hits the one meant.
+        const float k_Key = 0.04f;          // key pitch, meters: bigger than a real keyboard's, for camera taps
         const float k_Gap = 0.003f;
         const float k_PadWidth = 0.13f;
         const float k_PadHeight = 0.1f;
         // A tap: the fingertip comes this much closer to the table, within k_TapWindow, then back up.
-        const float k_TapDrop = 0.012f;
+        // iPhone 11 port: a firmer drop than upstream's 1.2 cm. Without LiDAR the fingertip's depth
+        // wavers by about that much on its own, which typed keys nobody pressed.
+        const float k_TapDrop = 0.02f;
+        // And no two finger taps closer together than this, in seconds.
+        const float k_TapGap = 0.25f;
         const float k_TapRise = 0.006f;
         const float k_TapWindow = 0.25f;
         // Fingertip travel over the pad, in meters, that crosses the whole screen.
@@ -44,6 +49,7 @@ namespace CardboardXR.Demos.Desktop
         public Action PadTap;
 
         public bool Visible => m_Root.gameObject.activeSelf;
+        float m_LastFingerTap = float.NegativeInfinity;
         public bool OnTable { get; private set; }
 
         class Key
@@ -198,6 +204,13 @@ namespace CardboardXR.Demos.Desktop
 
             // How far the fingertip is above the table, along the camera's ray. Its absolute value is
             // off by the hand-depth estimate, but how it changes shows a tap.
+            // iPhone 11 port: finger taps only on a real table. Floating in the air there's nothing for the
+            // finger to stop on, and its wavering depth read as taps; look and pinch still types there.
+            if (!OnTable)
+            {
+                ResetTap();
+                return;
+            }
             var worldOnPlane = m_Root.TransformPoint(local);
             var gap = Vector3.Distance(origin, worldOnPlane) - Vector3.Distance(origin, tip);
             DetectTap(gap, local);
@@ -231,7 +244,11 @@ namespace CardboardXR.Demos.Desktop
             }
             if (gap - m_MinGap > k_TapRise)
             {
-                Press(m_MinPoint, "finger");
+                if (now - m_LastFingerTap >= k_TapGap)
+                {
+                    m_LastFingerTap = now;
+                    Press(m_MinPoint, "finger");
+                }
                 ResetTap();
             }
             else if (now - m_MinTime > k_TapWindow)

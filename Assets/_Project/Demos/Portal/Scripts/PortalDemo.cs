@@ -1,3 +1,5 @@
+using CardboardXR.Hands;
+using CardboardXR.Stereo;
 using CardboardXR.UI;
 using TMPro;
 using UnityEngine;
@@ -11,8 +13,16 @@ namespace CardboardXR.Demos.Portal
     // shows the room: so everything, the world included, is seen flat, the same picture in both eyes.
     // Walking through needs the phone off its cable. Move portal takes it down to put it somewhere
     // else. Logs [Portal].
-    public class PortalDemo : Demo
+    // iPhone 11 port: without LiDAR the floor can take a long time to be found, and until it was,
+    // pinching did nothing. Now a pinch with no surface under the gaze opens the portal on the floor
+    // anyway, where the gaze meets it, or 2 m ahead, at the floor's detected or estimated height.
+    public class PortalDemo : Demo, IPinchHandler
     {
+        // How far ahead the portal opens when the gaze doesn't come down to the floor, in meters.
+        const float k_AheadDistance = 2f;
+        const float k_MinDistance = 1f;
+        const float k_MaxDistance = 4f;
+
         [SerializeField] GameObject m_PortalPrefab;
 
         CoreServices m_Core;
@@ -27,6 +37,7 @@ namespace CardboardXR.Demos.Portal
             m_Core = core;
             core.Placer.ObjectPrefab = m_PortalPrefab;
             core.Placer.Placed += OnPlaced;
+            PinchRouter.Handler = this;
             m_Audio = gameObject.AddComponent<AudioSource>();
             m_Audio.playOnAwake = false;
             m_Whoosh = Whoosh();
@@ -38,9 +49,40 @@ namespace CardboardXR.Demos.Portal
         public override void OnDemoExit(CoreServices core)
         {
             core.Placer.Placed -= OnPlaced;
+            if (ReferenceEquals(PinchRouter.Handler, this))
+                PinchRouter.Clear();
             if (m_Portal != null)
                 m_Portal.Crossed -= OnCrossed;
         }
+
+        // A pinch on a found surface places the portal there as before (AnchorPlacer); one with no
+        // surface under the gaze opens it on the floor ahead.
+        public bool TryBeginPinch(GameObject gazeTarget, PinchSource source)
+        {
+            if (m_Portal != null || m_Core.Placer.ObjectPrefab != m_PortalPrefab)
+                return false;
+            if (gazeTarget != null && (gazeTarget.GetComponentInParent<PlacementSurface>() != null ||
+                                       gazeTarget.GetComponentInParent<Canvas>() != null))
+                return false;
+            var head = m_Core.Head;
+            var floor = m_Core.Boundary.FloorHeight(head.position);
+            var flat = Vector3.ProjectOnPlane(head.forward, Vector3.up);
+            if (flat.sqrMagnitude < 1e-4f)
+                flat = Vector3.ProjectOnPlane(head.up, Vector3.up);
+            flat.Normalize();
+            // Where the gaze meets the floor, kept within a sensible distance; straight ahead otherwise.
+            var ahead = k_AheadDistance;
+            var drop = head.position.y - floor;
+            if (head.forward.y < -0.05f && drop > 0f)
+                ahead = Mathf.Clamp(drop / -head.forward.y * flat.magnitude, k_MinDistance, k_MaxDistance);
+            var point = new Vector3(head.position.x, floor, head.position.z) + flat * ahead;
+            Debug.Log($"[Portal] No surface under the gaze: opening on the {(m_Core.Boundary.HasFloor ? "detected" : "estimated")} " +
+                      $"floor {ahead:F1} m ahead");
+            m_Core.Placer.Place(point, Vector3.up, "estimated floor");
+            return true;
+        }
+
+        public void EndPinch() { }
 
         void OnPlaced(GameObject placed)
         {

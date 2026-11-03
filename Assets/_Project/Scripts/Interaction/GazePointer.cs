@@ -207,7 +207,46 @@ namespace CardboardXR.Interaction
                 };
             }
 
+            // Nothing clickable under the ray: a control just beside it takes the gaze (iPhone 11 port).
+            if (!IsInteractive(result.gameObject))
+                SnapToControl(ray, ref result);
             return result.gameObject != null;
+        }
+
+        // Within this angle of a control's edge, in degrees, the gaze snaps onto it.
+        [Tooltip("The gaze snaps onto a button this close to it, in degrees, when nothing clickable is under it.")]
+        [SerializeField] float m_SnapDegrees = 3f;
+
+        void SnapToControl(Ray ray, ref RaycastResult result)
+        {
+            if (m_SnapDegrees <= 0f)
+                return;
+            // Not past a virtual object the ray already hit; real surfaces and canvases' own
+            // backgrounds don't stop it.
+            var reach = result.gameObject != null && result.gameObject.TryGetComponent<Collider>(out var collider) &&
+                        !IsRealSurface(collider)
+                ? result.distance : m_MaxDistance;
+            Graphic best = null;
+            var bestDistance = 0f;
+            var bestAngle = m_SnapDegrees * Mathf.Deg2Rad;
+            var canvases = GazeCanvas.Active;
+            for (var i = 0; i < canvases.Count; i++)
+            {
+                if (!canvases[i].NearestControl(ray, reach, bestAngle, out var graphic, out var distance, out var angle))
+                    continue;
+                best = graphic;
+                bestDistance = distance;
+                bestAngle = angle;
+            }
+            if (best == null)
+                return;
+            result = new RaycastResult
+            {
+                gameObject = best.gameObject,
+                distance = bestDistance,
+                worldPosition = ray.GetPoint(bestDistance),
+                worldNormal = -best.transform.forward,
+            };
         }
 
         // The nearest collider along the ray, or, if that's a real surface, the nearest clickable

@@ -311,9 +311,17 @@ namespace CardboardXR.Hands
             // offers it through the same API, but a Pixel 9 Pro has no depth sensor, so its depth is
             // inferred from motion, which assumes a still scene and can't follow a moving hand, and
             // costs heat the hand models already strain.
-            m_UseDepth = m_Occlusion != null && Application.platform == RuntimePlatform.IPhonePlayer;
+            // iPhone 11 port: only where depth comes from LiDAR. Without it ARKit offers no environment
+            // depth, and the occlusion manager is PassthroughController's, for the people stencil, so
+            // this mustn't turn it off.
+            m_UseDepth = m_Occlusion != null && Application.platform == RuntimePlatform.IPhonePlayer && HasLidar();
             if (m_UseDepth)
                 m_Occlusion.enabled = true;
+            // iPhone 11 port: an A13 without LiDAR runs the landmarker at most 30 times a second
+            // unless "handHz" says otherwise, leaving CPU time for rendering; prediction fills in
+            // between results.
+            if (handHz <= 0 && Application.platform == RuntimePlatform.IPhonePlayer && !HasLidar() && m_TrackInterval <= 0f)
+                m_TrackInterval = 1f / 30f;
             m_StatusStart = Time.unscaledTime;
             m_Running = true;
             if (!m_LoopActive)
@@ -324,9 +332,32 @@ namespace CardboardXR.Hands
         {
             m_Running = false;
             m_CameraManager.frameReceived -= OnCameraFrame;
-            if (m_Occlusion != null)
+            if (m_Occlusion != null && m_UseDepth)
                 m_Occlusion.enabled = false;
             Lose();
+        }
+
+        // Whether the device has a LiDAR scanner, the only source of measured depth on an iPhone: the
+        // Pro models from the 12 Pro on. Read from the model identifier, since the occlusion
+        // subsystem can't say before the AR session runs.
+        static bool HasLidar()
+        {
+            var model = SystemInfo.deviceModel;
+            if (!model.StartsWith("iPhone") || !int.TryParse(model.Substring(6).Split(',')[0], out var major))
+                return model.StartsWith("iPad");
+            // iPhone 12 Pro and Pro Max are 13,3 and 13,4; from the 13 Pro (14,2 and 14,3) on, the Pro
+            // models are the higher numbers of each generation.
+            var minor = int.TryParse(model.Split(',')[^1], out var m) ? m : 0;
+            return major switch
+            {
+                < 13 => false,
+                13 => minor >= 3,
+                14 => minor is 2 or 3,
+                15 => minor is 2 or 3,
+                16 => minor is 1 or 2,
+                17 => minor is 1 or 2,
+                _ => true,
+            };
         }
 
         void OnCameraFrame(ARCameraFrameEventArgs args)

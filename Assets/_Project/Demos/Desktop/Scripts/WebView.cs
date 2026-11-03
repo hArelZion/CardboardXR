@@ -18,6 +18,7 @@ namespace CardboardXR.Demos.Desktop
         [DllImport("__Internal")] static extern int GlassesWeb_IsLoading();
         [DllImport("__Internal")] static extern int GlassesWeb_CopyFrame(byte[] buffer, int length, int lastFrame);
         [DllImport("__Internal")] static extern void GlassesWeb_Destroy();
+        [DllImport("__Internal")] static extern string GlassesWeb_Status();
         public static bool Supported => true;
 #else
         static int GlassesWeb_Create(int width, int height) => 0;
@@ -28,6 +29,7 @@ namespace CardboardXR.Demos.Desktop
         static int GlassesWeb_IsLoading() => 0;
         static int GlassesWeb_CopyFrame(byte[] buffer, int length, int lastFrame) => -1;
         static void GlassesWeb_Destroy() { }
+        static string GlassesWeb_Status() => "not on an iPhone";
         public static bool Supported => false;
 #endif
 
@@ -67,6 +69,9 @@ namespace CardboardXR.Demos.Desktop
 
         public Texture2D Texture { get; }
         public bool HasFrame => m_Frame > 0;
+
+        // How the native browser is doing, for the log (iPhone 11 port).
+        public string Status => $"{GlassesWeb_Status()}; {m_Frame} pictures shown";
         public bool IsLoading => GlassesWeb_IsLoading() != 0;
         public float Aspect => (float)m_Height / m_Width;
 

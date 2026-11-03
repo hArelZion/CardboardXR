@@ -57,7 +57,10 @@ namespace CardboardXR.Stereo
         [SerializeField] float m_VirtualFloorHeight = -1.6f;
 
         readonly PositionFilter m_Filter = new();
-        readonly YawAligner m_Yaw = new();
+        // iPhone 11 port: a shorter time constant than the 2 s default. With it the room took several
+        // seconds to settle after 6DoF started or the gyro's heading drifted, and things seemed to
+        // move with the head before they stayed put.
+        readonly YawAligner m_Yaw = new(0.8);
         // Learns the gyroscope bias behind the heading drift; kept across modes, since it applies in
         // 3DoF too.
         readonly GyroDriftEstimator m_Drift = new();

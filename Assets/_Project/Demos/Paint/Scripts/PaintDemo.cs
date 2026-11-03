@@ -91,6 +91,8 @@ namespace CardboardXR.Demos.Paint
             m_Core = core;
             core.Placer.ObjectPrefab = null;
             PinchRouter.Handler = this;
+            // iPhone 11 port: the real hand drawn over virtual things would hide the brush at its fingertips.
+            core.Passthrough.HandInFront = false;
             m_StrokesRoot = new GameObject("Paint Strokes").transform;
             // In the room's space, which the XR Origin is.
             m_StrokesRoot.SetParent(core.Boundary.transform, false);
@@ -105,6 +107,7 @@ namespace CardboardXR.Demos.Paint
         {
             if (ReferenceEquals(PinchRouter.Handler, this))
                 PinchRouter.Clear();
+            core.Passthrough.HandInFront = true;
             Debug.Log($"[Paint] Leaving with {m_Strokes.Count} strokes");
             if (m_StrokesRoot != null)
                 Destroy(m_StrokesRoot.gameObject);

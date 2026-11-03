@@ -155,6 +155,25 @@ events + click(), scroll = nearest scrollable, Type = TouchScreenKeyboard → fo
 - Netflix: impossible on iPhone (no web playback on iOS, DRM). Via Computer Screen only, and Chrome
   needs hardware acceleration off for DRM video to be capturable.
 
+### Phase 1b — First on-device test fixes (2026-11-03, untested on device)
+From the user's first video (IMG_4100) and complaints; no session.log yet, so measure next time.
+- **View size:** `StereoRig.ViewZoom` narrows the eye frusta; passthrough applies the settings
+  panel's View 100-200% (default 150%, `PlayerPrefs`, launch option `zoom`). The camera picture fills
+  more of the lens and virtual things no longer hang over the dark border.
+- **Hand in front (R2 done the cheap way):** ARKit people stencil → passthrough texture alpha
+  (`Resources/Shaders/PassthroughPeople`), a second quad draws those texels last
+  (`PassthroughHand`). `PassthroughController.HandInFront`; Paint turns it off.
+- **Pinch:** 3.5/5.5 cm, an image-gap gate (0.6 palm widths) and two closed results to start.
+- **Buttons:** gaze snaps to a control within 3° (`GazeCanvas.NearestControl`).
+- **CPU:** landmarker capped at 30/s on iPhones without LiDAR; occlusion manager only used for
+  depth with LiDAR. **Settling:** `YawAligner` time constant 0.8 s (was 2 s).
+- **Browser:** snapshots don't wait for screen updates, time out after 1 s, `[Web]` status line.
+- **Walls:** `WallOccluders` give detected vertical planes a depth-only copy in passthrough.
+- **Portal:** a pinch with no surface under the gaze opens it on the detected or estimated floor.
+- **Keyboard:** 4 cm keys, finger taps only on a table, firmer drop, 0.25 s between taps.
+- Not addressed: plane finding speed without LiDAR (ARKit's own), hand tracking quality beyond
+  pinch gating.
+
 ### Phase 4 — Vision Pro feel (spikes, measured before adopted)
 - **R1 Apple Vision hands:** `VNDetectHumanHandPoseRequest` runs on the Neural Engine; compare
   with MediaPipe on fps, latency, heat. Possible hybrid: Vision 2D joints every frame, MediaPipe

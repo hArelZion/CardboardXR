@@ -72,7 +72,12 @@ namespace CardboardXR.Stereo
         // Anchors a new object on the plane at a world point. The anchor isn't attached to the plane:
         // AR Foundation parents a plane-attached anchor to the plane's GameObject, and destroys it
         // with the plane when ARCore merges or drops the plane.
-        public async void Place(ARPlane plane, Vector3 point)
+        public void Place(ARPlane plane, Vector3 point) => Place(point, plane.normal, plane.alignment.ToString());
+
+        // Anchors a new object at a world point on a surface with this normal, which may be one ARKit
+        // hasn't found as a plane (iPhone 11 port: the estimated floor, for the portal). surface names
+        // it for the log.
+        public async void Place(Vector3 point, Vector3 normal, string surface)
         {
             if (m_ObjectPrefab == null || !m_Anchors.enabled || m_Anchors.subsystem == null)
                 return;
@@ -84,8 +89,8 @@ namespace CardboardXR.Stereo
             }
 
             var head = m_Fusion.transform.position;
-            var pose = PlacementPose(point, plane.normal, head);
-            var alignment = plane.alignment;
+            var pose = PlacementPose(point, normal, head);
+            var alignment = surface;
             var placedAt = InSession(pose.position);
             var result = await m_Anchors.TryAddAnchorAsync(pose);
             if (this == null)
